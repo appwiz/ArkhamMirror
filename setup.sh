@@ -2,8 +2,9 @@
 set -e
 
 # Prevent Reflex from making network calls to Cloudflare (1.1.1.1) for IPv4/IPv6 detection.
-# This can trigger firewall alerts. Use "::" instead for pure IPv6 networks.
-export REFLEX_HTTP_CLIENT_BIND_ADDRESS="0.0.0.0"
+# Using 127.0.0.1 for consistency with our localhost-only security posture.
+# For pure IPv6 networks, use "::" instead.
+export REFLEX_HTTP_CLIENT_BIND_ADDRESS="127.0.0.1"
 
 # Colors for output
 RED='\033[0;31m'

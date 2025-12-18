@@ -52,7 +52,8 @@ A security review identified the following issues that have been addressed:
 | Google Fonts CDN | **Fixed** | Inter font is now self-hosted in `/assets/fonts/` |
 | Qdrant telemetry default | **Fixed** | Now defaults to disabled in docker-compose.yml |
 | ModelScope connectivity check | **Fixed** | Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` in ocr_worker.py |
-| Cloudflare 1.1.1.1 connectivity check | **Fixed** | Set `REFLEX_HTTP_CLIENT_BIND_ADDRESS=0.0.0.0` (see below) |
+| Cloudflare 1.1.1.1 connectivity check | **Fixed** | Set `REFLEX_HTTP_CLIENT_BIND_ADDRESS=127.0.0.1` (see below) |
+| LAN exposure (backend_host) | **Fixed** | Set `backend_host="127.0.0.1"` in rxconfig.py (see below) |
 | PaddleOCR Chinese servers | Documented | One-time download; use Qwen-VL as alternative |
 | HuggingFace downloads | Documented | One-time download; can pre-download for air-gap |
 
@@ -60,9 +61,19 @@ A security review identified the following issues that have been addressed:
 
 **Root Cause:** Reflex (the web framework) performs IPv4/IPv6 connectivity detection by making HTTP HEAD requests to Cloudflare's public DNS resolver IPs (`1.1.1.1` for IPv4, `2606:4700:4700::1111` for IPv6). This happens in `reflex/utils/net.py` on the first network request (e.g., version check, template download).
 
-**Fix Applied:** The setup scripts (`setup.bat`, `setup.sh`) and `ai_installer.py` now set `REFLEX_HTTP_CLIENT_BIND_ADDRESS=0.0.0.0` before any Reflex imports, which skips the auto-detection.
+**Fix Applied:** The setup scripts (`setup.bat`, `setup.sh`) and `ai_installer.py` now set `REFLEX_HTTP_CLIENT_BIND_ADDRESS=127.0.0.1` before any Reflex imports, which skips the auto-detection.
 
 **For pure IPv6 networks:** Set `REFLEX_HTTP_CLIENT_BIND_ADDRESS=::` instead in your `.env` file.
+
+**Note:** `REFLEX_HTTP_CLIENT_BIND_ADDRESS` controls *outbound* HTTP client requests, not server listening. Using `127.0.0.1` is a belt-and-suspenders safety measure for consistency with our localhost-only security posture — while `0.0.0.0` would also work here (since it's for outbound, not inbound), we use `127.0.0.1` everywhere for peace of mind.
+
+### LAN Exposure - Root Cause & Fix
+
+**Root Cause:** Reflex defaults `backend_host` to `0.0.0.0`, which means the backend API listens on *all network interfaces*. If you're on a shared network (coffee shop WiFi, office LAN), anyone on that network could potentially access your ArkhamMirror instance by typing your local IP address (e.g., `192.168.1.5:8000`).
+
+**Fix Applied:** We explicitly set `backend_host="127.0.0.1"` in `app/rxconfig.py`, ensuring the backend *only* listens on localhost. This aligns with ArkhamMirror's air-gapped security model.
+
+**For "Team Mode" (LAN access):** If you intentionally want to share your instance with other devices on your network, you can override this by setting `BACKEND_HOST=0.0.0.0` in your `.env` file. Only do this on trusted networks.
 
 If you observe connections to other unexpected domains, please open an issue with network capture details.
 
@@ -113,15 +124,17 @@ iptables -A OUTPUT -d telemetry.qdrant.io -j DROP
 
 For environments with no internet access, follow this procedure:
 
-### On a Networked Machine:
+### On a Networked Machine
 
 1. **Clone and set up ArkhamMirror normally:**
+
    ```bash
    git clone https://github.com/mantisfury/ArkhamMirror.git
    cd ArkhamMirror
    ```
 
 2. **Install all dependencies:**
+
    ```bash
    cd app
    python -m venv venv
@@ -130,6 +143,7 @@ For environments with no internet access, follow this procedure:
    ```
 
 3. **Pre-download models:**
+
    ```bash
    # This triggers model downloads
    python -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/bge-m3')"
@@ -138,6 +152,7 @@ For environments with no internet access, follow this procedure:
    ```
 
 4. **Pull Docker images:**
+
    ```bash
    docker pull postgres:15
    docker pull qdrant/qdrant:latest
@@ -146,6 +161,7 @@ For environments with no internet access, follow this procedure:
    ```
 
 5. **Save Docker images for transfer:**
+
    ```bash
    docker save postgres:15 qdrant/qdrant:latest redis:7 busybox:latest | gzip > arkham-images.tar.gz
    ```
@@ -155,9 +171,10 @@ For environments with no internet access, follow this procedure:
    - Include `arkham-images.tar.gz`
    - Include any downloaded models from `~/.cache/huggingface/` and `~/.paddleocr/`
 
-### On the Air-Gapped Machine:
+### On the Air-Gapped Machine
 
 1. **Load Docker images:**
+
    ```bash
    gunzip -c arkham-images.tar.gz | docker load
    ```
@@ -170,6 +187,7 @@ For environments with no internet access, follow this procedure:
 3. **Disable telemetry** (see above)
 
 4. **Start the application:**
+
    ```bash
    cd docker && docker compose up -d
    cd ../app && reflex run
@@ -181,19 +199,22 @@ For environments with no internet access, follow this procedure:
 
 To confirm no network calls are being made:
 
-### Linux/Mac:
+### Linux/Mac
+
 ```bash
 # Monitor network connections while running
 sudo lsof -i -P | grep -E "python|node|postgres|qdrant|redis"
 ```
 
-### Windows:
+### Windows
+
 ```powershell
 # In PowerShell as Administrator
 netstat -b | Select-String -Pattern "python|node|postgres|qdrant|redis"
 ```
 
-### Using Wireshark:
+### Using Wireshark
+
 1. Start Wireshark on your network interface
 2. Filter: `not (ip.addr == 127.0.0.1)`
 3. Run ArkhamMirror and observe - there should be no external traffic after initial setup

@@ -5,10 +5,14 @@ from pathlib import Path
 # Add project root to path for central config import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import DATABASE_URL, BACKEND_PORT, FRONTEND_PORT
+from config import DATABASE_URL, BACKEND_PORT, FRONTEND_PORT, BACKEND_HOST
 
 config = rx.Config(
     app_name="arkham",
+    # Security: Bind to localhost only (Reflex defaults to 0.0.0.0 which exposes to LAN)
+    # This prevents anyone on your local network from accessing your ArkhamMirror instance.
+    # For "Team Mode" or LAN access, set BACKEND_HOST=0.0.0.0 in .env
+    backend_host=BACKEND_HOST,
     # Backend API port (Reflex FastAPI server)
     backend_port=BACKEND_PORT,
     # Frontend port (Next.js dev server)

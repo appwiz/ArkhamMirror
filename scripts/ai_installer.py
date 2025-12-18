@@ -8,8 +8,9 @@ import os
 
 # Prevent Reflex from making network calls to Cloudflare (1.1.1.1) for IPv4/IPv6 detection.
 # This check happens on first import of reflex and can trigger firewall alerts.
-# Setting this explicitly skips the auto-detection. Use "::" for pure IPv6 networks.
-os.environ.setdefault("REFLEX_HTTP_CLIENT_BIND_ADDRESS", "0.0.0.0")
+# Using 127.0.0.1 for consistency with our localhost-only security posture.
+# For pure IPv6 networks, use "::" instead.
+os.environ.setdefault("REFLEX_HTTP_CLIENT_BIND_ADDRESS", "127.0.0.1")
 
 import json
 import time

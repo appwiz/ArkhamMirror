@@ -147,6 +147,10 @@ LM_STUDIO_URL = os.getenv("LM_STUDIO_URL") or os.getenv(
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "3000"))
 
+# Security: Default to localhost binding (prevents LAN exposure)
+# Set BACKEND_HOST=0.0.0.0 for "Team Mode" if you want LAN access on trusted networks
+BACKEND_HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
+
 # Debug mode
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
@@ -270,6 +274,7 @@ def get_config_summary() -> dict:
         "REDIS_URL": REDIS_URL,
         "LM_STUDIO_URL": LM_STUDIO_URL,
         "PYTHON_EXECUTABLE": PYTHON_EXECUTABLE,
+        "BACKEND_HOST": BACKEND_HOST,
         "BACKEND_PORT": BACKEND_PORT,
         "FRONTEND_PORT": FRONTEND_PORT,
         "CONFIG_YAML_PATH": str(CONFIG_YAML_PATH),
