@@ -1,7 +1,10 @@
+# Disable PaddleX model source checking to prevent network calls to modelscope.cn
+# Models are downloaded once during first run; this prevents connectivity checks on every init.
+import os
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 from config.settings import DATABASE_URL, REDIS_URL, PAGES_DIR
 import hashlib
-import os
-import json
 import logging
 import numpy as np
 from PIL import Image

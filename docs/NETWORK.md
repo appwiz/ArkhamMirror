@@ -51,17 +51,15 @@ A security review identified the following issues that have been addressed:
 |-------|--------|-------------|
 | Google Fonts CDN | **Fixed** | Inter font is now self-hosted in `/assets/fonts/` |
 | Qdrant telemetry default | **Fixed** | Now defaults to disabled in docker-compose.yml |
+| ModelScope connectivity check | **Fixed** | Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` in ocr_worker.py |
 | PaddleOCR Chinese servers | Documented | One-time download; use Qwen-VL as alternative |
 | HuggingFace downloads | Documented | One-time download; can pre-download for air-gap |
 
 ### Reported but Not Confirmed
 
-The following domains were reported by a user but **not found** in our security review:
+- `cloudflare 1.1.1.1` - No hardcoded DNS references found in codebase
 
-- `modelscope.cn` - Not referenced in codebase
-- `cloudflare 1.1.1.1` - No hardcoded DNS references found
-
-If you observe connections to these domains, please open an issue with network capture details.
+If you observe connections to unexpected domains, please open an issue with network capture details.
 
 ### Never Contacted
 
