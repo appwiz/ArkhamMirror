@@ -77,18 +77,17 @@ The app supports optional LLM integration for AI-assisted analysis. AI can help 
 - Providing analysis insights
 - Suggesting future milestones to watch
 
-### Cloud Providers (Work from GitHub Pages)
+### Cloud Providers (Work Everywhere)
 
-These providers work directly from the browser, including on GitHub Pages:
+Cloud LLM providers work both on GitHub Pages and when running locally:
 
 | Provider | Endpoint | API Key Required |
 |----------|----------|------------------|
 | OpenAI | `https://api.openai.com/v1` | Yes |
 | Groq | `https://api.groq.com/openai/v1` | Yes (free tier available) |
 | OpenRouter | `https://openrouter.ai/api/v1` | Yes |
+| Anthropic | `https://api.anthropic.com/v1` | Yes |
 | Any OpenAI-compatible API | Your endpoint URL | Varies |
-
-> **Note about Anthropic**: Anthropic's API blocks browser requests (CORS). To use Claude, you must run ACH locally (see below) or use OpenRouter which provides access to Claude models.
 
 **To configure:**
 1. Click the gear icon in the top right
@@ -107,19 +106,6 @@ Local LLM providers keep everything on your machine - no data leaves your comput
 |----------|------------------|-------|
 | LM Studio | `http://localhost:1234/v1` | OpenAI-compatible API |
 | Ollama | `http://localhost:11434/v1` | OpenAI-compatible mode |
-
-### Anthropic (Requires Running Locally)
-
-Anthropic's API works when running ACH locally but not from GitHub Pages due to CORS restrictions.
-
-| Provider | Endpoint | API Key Required |
-|----------|----------|------------------|
-| Anthropic | `https://api.anthropic.com/v1` | Yes |
-
-To use Anthropic/Claude:
-1. Clone this repo and run `npm install && npm run dev`
-2. Open `http://localhost:5173`
-3. Configure with your Anthropic API key and model (e.g., `claude-3-haiku-20240307`)
 
 #### Requirements for Local LLM
 
@@ -148,8 +134,7 @@ For best results with ACH analysis, use instruction-tuned models:
 
 | Issue | Solution |
 |-------|----------|
-| "CORS error" with Anthropic | Anthropic blocks browser requests - run ACH locally or use OpenRouter |
-| "CORS error" with local LLM | Enable CORS on your local server, or run ACH locally |
+| "CORS error" | Enable CORS on your local server, or run ACH locally |
 | "Failed to fetch" | Check that your LLM server is running |
 | "Connection refused" | Verify the endpoint URL and port |
 | "Unauthorized" | Check your API key (cloud providers) |
