@@ -24,12 +24,13 @@ from sqlalchemy.orm import sessionmaker
 
 from config.settings import DATABASE_URL, REDIS_URL, DOCUMENTS_DIR
 
-from app.arkham.services.db.models import Document, Chunk, MiniDoc, DateMention, TimelineEvent, SensitiveDataMatch
+from app.arkham.services.db.models import Document, Chunk, MiniDoc, DateMention, TimelineEvent, SensitiveDataMatch, ExtractedTable
 from app.arkham.services.utils.hash_utils import get_file_hash
 from app.arkham.services.utils.security_utils import sanitize_filename
-from app.arkham.services.converters import is_text_based_file, extract_text_direct
+from app.arkham.services.converters import is_text_based_file, extract_text_direct, extract_tables_from_text
 from app.arkham.services.timeline_service import extract_timeline_from_chunk
 from app.arkham.services.utils.pattern_detector import detect_sensitive_data
+from app.arkham.services.utils.smart_chunker import smart_chunk, agentic_chunk, ChunkConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,6 +78,26 @@ def _process_text_directly(session, doc, extracted_data):
         # Store full metadata as JSON in a notes field or similar if available
         logger.info(f"Email metadata extracted: {list(metadata.keys())}")
 
+    # Extract tables from text and create ExtractedTable records
+    try:
+        tables = extract_tables_from_text(text)
+        for table_data in tables:
+            ext_table = ExtractedTable(
+                doc_id=doc.id,
+                page_num=table_data["page_num"],
+                table_index=table_data["table_index"],
+                row_count=table_data["row_count"],
+                col_count=table_data["col_count"],
+                headers=table_data["headers"],
+                text_content=table_data["text_content"],
+            )
+            session.add(ext_table)
+
+        if tables:
+            logger.info(f"Extracted {len(tables)} tables from text-based file (doc_id={doc.id})")
+    except Exception as e:
+        logger.warning(f"Table extraction from text failed (non-fatal): {e}")
+
     # Create a single MiniDoc for text files (they're typically small)
     minidoc_id = f"{doc.file_hash}__text_001"
     minidoc = MiniDoc(
@@ -89,14 +110,31 @@ def _process_text_directly(session, doc, extracted_data):
     session.add(minidoc)
     session.flush()
 
-    # Chunk the text - create all chunks first, then commit, then enqueue embed jobs
-    step = 512
-    overlap = 50
+    # Determine chunking strategy from Redis
+    chunking_strategy = "smart"  # Default
+    try:
+        strategy = redis_conn.get("arkham:chunking_strategy")
+        if strategy:
+            chunking_strategy = strategy.decode()
+            logger.info(f"Using chunking strategy from Redis: {chunking_strategy}")
+    except Exception as e:
+        logger.debug(f"Could not read chunking strategy from Redis: {e}")
+
+    # Chunk the text using smart/agentic chunking
+    config = ChunkConfig(max_chunk_size=512, min_chunk_size=100, overlap=50)
+
+    if chunking_strategy == "agentic":
+        logger.info("Using agentic (LLM-based) chunking for text file")
+        chunks_list = agentic_chunk(text, config)
+    else:
+        logger.info("Using smart recursive chunking for text file")
+        chunks_list = smart_chunk(text, config)
+
+    logger.info(f"Created {len(chunks_list)} chunks from {len(text)} characters")
+
     chunk_ids = []  # Collect chunk IDs for embedding after commit
 
-    for i in range(0, len(text), step - overlap):
-        chunk_text = text[i : i + step]
-        chunk_index = len(chunk_ids)
+    for chunk_index, chunk_text in enumerate(chunks_list):
 
         chunk = Chunk(
             doc_id=doc.id,

@@ -260,12 +260,35 @@ class IngestionStatusState(rx.State):
             if redis_url:
                 redis_conn = Redis.from_url(redis_url)
                 redis_conn.set("arkham:ingestion_mode", self.ingestion_mode)
+
+                # Map ingestion mode to OCR mode
+                # economy/enhanced use fast PaddleOCR, vision uses Qwen-VL
+                ocr_mode_map = {
+                    "economy": "paddle",
+                    "enhanced": "paddle",
+                    "vision": "qwen"
+                }
+                ocr_mode = ocr_mode_map.get(self.ingestion_mode, "paddle")
+                redis_conn.set("arkham:ocr_mode", ocr_mode)
+
+                # Map ingestion mode to chunking strategy
+                # economy/enhanced use smart recursive chunking, vision uses LLM-based agentic chunking
+                chunking_map = {
+                    "economy": "smart",
+                    "enhanced": "smart",
+                    "vision": "agentic"
+                }
+                chunking_strategy = chunking_map.get(self.ingestion_mode, "smart")
+                redis_conn.set("arkham:chunking_strategy", chunking_strategy)
+
                 redis_conn.set(
                     "arkham:auto_fallback", "1" if self.auto_fallback_enabled else "0"
                 )
                 redis_conn.set(
                     "arkham:fallback_threshold", str(self.fallback_threshold)
                 )
+
+                logger.info(f"Synced to Redis: mode={self.ingestion_mode}, ocr={ocr_mode}, chunking={chunking_strategy}")
         except Exception as e:
             logger.error(f"Failed to sync mode to Redis: {e}")
 

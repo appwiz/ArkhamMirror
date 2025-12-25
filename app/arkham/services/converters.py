@@ -2,12 +2,13 @@ import os
 import logging
 import plistlib
 import re
+import json
 import docx
 import extract_msg
 from email import policy
 from email.parser import BytesParser
 from PIL import Image
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,10 @@ def extract_text_direct(file_path: str) -> Optional[Dict[str, Any]]:
         elif ext in {".html", ".htm"}:
             return _extract_html(file_path)
         elif ext == ".md":
-            return _extract_txt(file_path)  # Markdown is just text
-        elif ext in {".json", ".xml", ".csv"}:
+            return _extract_md(file_path)
+        elif ext == ".csv":
+            return _extract_csv(file_path)
+        elif ext in {".json", ".xml"}:
             return _extract_txt(file_path)  # Treat as plain text
         else:
             return None
@@ -64,6 +67,100 @@ def _extract_txt(file_path: str) -> Dict[str, Any]:
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
     return {"text": text, "metadata": {}}
+
+
+def _extract_csv(file_path: str) -> Dict[str, Any]:
+    """Extract CSV file as a table with markers."""
+    import csv
+
+    with open(file_path, "r", encoding="utf-8", errors="replace", newline='') as f:
+        # Try to detect delimiter
+        sample = f.read(4096)
+        f.seek(0)
+
+        try:
+            dialect = csv.Sniffer().sniff(sample)
+        except csv.Error:
+            dialect = csv.excel  # Default to comma-separated
+
+        reader = csv.reader(f, dialect)
+        rows = list(reader)
+
+    if not rows:
+        return {"text": "", "metadata": {}}
+
+    # Build table with markers
+    table_lines = ["=== TABLE 1 ==="]
+    for row in rows:
+        table_lines.append(" | ".join(cell.strip() for cell in row))
+    table_lines.append("=== END TABLE 1 ===")
+
+    text = "\n".join(table_lines)
+
+    return {
+        "text": text,
+        "metadata": {
+            "row_count": len(rows),
+            "col_count": len(rows[0]) if rows else 0,
+        }
+    }
+
+
+def _extract_md(file_path: str) -> Dict[str, Any]:
+    """
+    Extract markdown file, converting markdown tables to our table format.
+
+    Markdown tables look like:
+    | Header1 | Header2 |
+    |---------|---------|
+    | Cell1   | Cell2   |
+    """
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    # Find markdown tables and convert them
+    # Pattern: lines starting with | and containing |
+    lines = text.split('\n')
+    result_lines = []
+    table_buffer = []
+    table_count = 0
+    in_table = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Check if this is a table row
+        is_table_row = stripped.startswith('|') and stripped.endswith('|') and '|' in stripped[1:-1]
+        # Check if this is a separator row (|---|---|)
+        is_separator = is_table_row and all(c in '|-: ' for c in stripped)
+
+        if is_table_row:
+            if not in_table:
+                # Starting a new table
+                in_table = True
+                table_count += 1
+                table_buffer = [f"=== TABLE {table_count} ==="]
+
+            if not is_separator:
+                # Extract cells, removing outer pipes
+                cells = [cell.strip() for cell in stripped[1:-1].split('|')]
+                table_buffer.append(" | ".join(cells))
+        else:
+            if in_table:
+                # End of table
+                table_buffer.append(f"=== END TABLE {table_count} ===")
+                result_lines.append('\n'.join(table_buffer))
+                table_buffer = []
+                in_table = False
+
+            result_lines.append(line)
+
+    # Handle table at end of file
+    if in_table:
+        table_buffer.append(f"=== END TABLE {table_count} ===")
+        result_lines.append('\n'.join(table_buffer))
+
+    return {"text": '\n'.join(result_lines), "metadata": {}}
 
 
 def _extract_eml(file_path: str) -> Dict[str, Any]:
@@ -208,41 +305,143 @@ Date: {metadata['email_date']}
     return {"text": header_text + body, "metadata": metadata}
 
 
-def _extract_docx_text(file_path: str) -> Dict[str, Any]:
-    """Extract text from .docx file."""
-    doc = docx.Document(file_path)
+def _extract_docx_text(file_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Extract text from .docx file including tables.
 
-    # Extract all paragraph text
-    paragraphs = [para.text for para in doc.paragraphs]
-    text = "\n".join(paragraphs)
+    Tables are wrapped with markers for chunking protection:
+    === TABLE N ===
+    Header1 | Header2 | Header3
+    Row1Col1 | Row1Col2 | Row1Col3
+    === END TABLE N ===
+    """
+    logger.info(f"Starting DOCX extraction: {file_path}")
 
-    # Extract core properties as metadata
-    metadata = {}
+    # Validate file exists
+    if not os.path.exists(file_path):
+        logger.error(f"DOCX file not found: {file_path}")
+        return None
+
     try:
-        props = doc.core_properties
-        if props.author:
-            metadata["doc_author"] = props.author
-        if props.title:
-            metadata["doc_title"] = props.title
-        if props.subject:
-            metadata["doc_subject"] = props.subject
-        if props.created:
-            metadata["doc_created"] = str(props.created)
-        if props.modified:
-            metadata["doc_modified"] = str(props.modified)
-    except Exception as e:
-        logger.debug(f"Could not extract docx properties: {e}")
+        file_size = os.path.getsize(file_path)
+        logger.info(f"DOCX file size: {file_size:,} bytes")
+    except Exception as stat_err:
+        logger.warning(f"Could not get file stats: {stat_err}")
 
-    return {"text": text, "metadata": metadata}
+    try:
+        doc = docx.Document(file_path)
+        logger.info(f"DOCX opened successfully. Paragraphs: {len(doc.paragraphs)}, Tables: {len(doc.tables)}")
+
+        text_parts = []
+
+        # Extract all paragraph text
+        para_count = 0
+        for para in doc.paragraphs:
+            if para.text.strip():
+                text_parts.append(para.text)
+                para_count += 1
+        logger.info(f"Extracted {para_count} non-empty paragraphs")
+
+        # Extract tables
+        table_count = 0
+        for table_idx, table in enumerate(doc.tables):
+            try:
+                table_lines = []
+                table_lines.append(f"\n=== TABLE {table_idx + 1} ===")
+
+                row_count = 0
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    # Deduplicate merged cells (Word tables can repeat content for merged cells)
+                    unique_cells = []
+                    prev_cell = None
+                    for cell in cells:
+                        if cell != prev_cell:
+                            unique_cells.append(cell)
+                            prev_cell = cell
+                    table_lines.append(" | ".join(unique_cells))
+                    row_count += 1
+
+                table_lines.append(f"=== END TABLE {table_idx + 1} ===\n")
+                text_parts.append("\n".join(table_lines))
+                table_count += 1
+                logger.debug(f"Extracted table {table_idx + 1} with {row_count} rows")
+
+            except Exception as table_err:
+                logger.warning(f"Failed to extract table {table_idx + 1}: {table_err}")
+                continue
+
+        logger.info(f"Extracted {table_count} tables successfully")
+
+        text = "\n".join(text_parts)
+        logger.info(f"Total extracted text length: {len(text)} characters")
+
+        # Extract core properties as metadata
+        metadata = {}
+        try:
+            props = doc.core_properties
+            if props.author:
+                metadata["doc_author"] = props.author
+            if props.title:
+                metadata["doc_title"] = props.title
+            if props.subject:
+                metadata["doc_subject"] = props.subject
+            if props.created:
+                metadata["doc_created"] = str(props.created)
+            if props.modified:
+                metadata["doc_modified"] = str(props.modified)
+        except Exception as e:
+            logger.debug(f"Could not extract docx properties: {e}")
+
+        return {"text": text, "metadata": metadata}
+
+    except Exception as e:
+        logger.error(f"DOCX extraction failed for {file_path}: {e}", exc_info=True)
+        return None
 
 
 def _extract_html(file_path: str) -> Dict[str, Any]:
-    """Extract text from HTML file."""
+    """Extract text from HTML file, including tables with markers."""
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         html = f.read()
 
-    text = _strip_html(html)
-    return {"text": text, "metadata": {}}
+    text_parts = []
+
+    # Extract tables first, before stripping HTML
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'lxml')
+
+        # Extract tables with markers
+        for table_idx, table in enumerate(soup.find_all('table')):
+            table_lines = [f"\n=== TABLE {table_idx + 1} ==="]
+
+            rows = table.find_all('tr')
+            for row in rows:
+                cells = row.find_all(['th', 'td'])
+                cell_texts = [cell.get_text(strip=True) for cell in cells]
+                if any(cell_texts):  # Skip empty rows
+                    table_lines.append(" | ".join(cell_texts))
+
+            table_lines.append(f"=== END TABLE {table_idx + 1} ===\n")
+
+            if len(table_lines) > 2:  # Has actual content
+                text_parts.append("\n".join(table_lines))
+
+            # Remove table from soup to avoid duplicate extraction
+            table.decompose()
+
+        # Get remaining text (non-table content)
+        remaining_text = soup.get_text(separator=' ', strip=True)
+        if remaining_text:
+            text_parts.insert(0, remaining_text)  # Put main text first
+
+    except ImportError:
+        # Fallback if BeautifulSoup not available (it should be - it's in requirements)
+        logger.warning("BeautifulSoup not available, falling back to simple HTML strip")
+        text_parts.append(_strip_html(html))
+
+    return {"text": "\n\n".join(text_parts), "metadata": {}}
 
 
 def _strip_html(html: str) -> str:
@@ -255,6 +454,64 @@ def _strip_html(html: str) -> str:
     # Clean up whitespace
     html = re.sub(r'\s+', ' ', html)
     return html.strip()
+
+
+# =============================================================================
+# TABLE EXTRACTION FROM TEXT
+# =============================================================================
+
+def extract_tables_from_text(text: str) -> List[Dict[str, Any]]:
+    """
+    Parse table markers from extracted text and return table metadata.
+
+    Looks for patterns like:
+    === TABLE N ===
+    Header1 | Header2 | Header3
+    Row1Col1 | Row1Col2 | Row1Col3
+    === END TABLE N ===
+
+    Returns:
+        List of dicts with keys: table_index, row_count, col_count, headers, text_content
+    """
+    tables = []
+
+    # Pattern to match table blocks
+    table_pattern = re.compile(
+        r'=== TABLE (\d+) ===\s*\n(.*?)=== END TABLE \1 ===',
+        re.DOTALL
+    )
+
+    for match in table_pattern.finditer(text):
+        table_index = int(match.group(1))
+        table_content = match.group(2).strip()
+
+        if not table_content:
+            continue
+
+        lines = [line.strip() for line in table_content.split('\n') if line.strip()]
+        if not lines:
+            continue
+
+        # First line is headers
+        headers = [cell.strip() for cell in lines[0].split('|')]
+
+        # Count rows and columns
+        row_count = len(lines)
+        col_count = len(headers)
+
+        # Full text representation
+        text_content = f"=== TABLE {table_index} ===\n{table_content}\n=== END TABLE {table_index} ==="
+
+        tables.append({
+            "table_index": table_index,
+            "page_num": 1,  # Text files are treated as single page
+            "row_count": row_count,
+            "col_count": col_count,
+            "headers": json.dumps(headers),
+            "text_content": text_content,
+        })
+
+    return tables
 
 
 # =============================================================================

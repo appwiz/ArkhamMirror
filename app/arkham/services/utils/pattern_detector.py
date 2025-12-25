@@ -5,7 +5,7 @@ Detects common sensitive patterns in text:
 - Social Security Numbers (SSN)
 - Credit Card Numbers
 - Email Addresses
-- Phone Numbers
+- Phone Numbers (US, Ukrainian, International)
 - IP Addresses
 - API Keys
 - IBANs (International Bank Account Numbers)
@@ -56,11 +56,32 @@ class PatternDetector:
                 "description": "Email Address"
             },
 
-            # Phone Numbers (US/International)
+            # Phone Numbers (US)
+            "phone_us": {
+                "regex": re.compile(r'(?:\+\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'),
+                "validator": None,
+                "description": "Phone Number (US)"
+            },
+
+            # Phone Numbers (backward compatibility - maps to phone_us)
             "phone": {
                 "regex": re.compile(r'(?:\+\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'),
                 "validator": None,
-                "description": "Phone Number"
+                "description": "Phone Number (US)"
+            },
+
+            # Phone Numbers (Ukrainian)
+            "phone_ua": {
+                "regex": re.compile(r'\+380\s?(\d{2})\s?(\d{3})\s?(\d{2})\s?(\d{2})\b'),
+                "validator": self._validate_ukrainian_phone,
+                "description": "Phone Number (Ukrainian)"
+            },
+
+            # Phone Numbers (International)
+            "phone_intl": {
+                "regex": re.compile(r'\+\d{1,4}[\s.-]?\d{1,5}[\s.-]?\d{1,5}[\s.-]?\d{1,9}\b'),
+                "validator": self._validate_international_phone,
+                "description": "Phone Number (International)"
             },
 
             # IP Addresses (IPv4)
@@ -276,6 +297,33 @@ class PatternDetector:
         # Full IBAN validation requires mod-97 check, which is complex
         # We'll accept structurally valid IBANs with medium confidence
         return True, 0.7
+
+    def _validate_ukrainian_phone(self, phone: str) -> tuple:
+        """
+        Validate Ukrainian phone number.
+        Format: +380 XX XXX XX XX (12 digits total after +)
+        """
+        digits = re.sub(r'[\s.-]', '', phone)
+        if not digits.startswith('+380'):
+            return False, 0.0
+        if len(digits) != 13:  # + plus 12 digits
+            return False, 0.0
+        # Valid Ukrainian mobile prefixes
+        mobile_prefixes = ['39', '50', '63', '66', '67', '68', '73', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+        prefix = digits[4:6]
+        if prefix in mobile_prefixes:
+            return True, 0.95
+        return True, 0.7
+
+    def _validate_international_phone(self, phone: str) -> tuple:
+        """Basic validation for international phone numbers."""
+        digits = re.sub(r'[\s.-]', '', phone)
+        if not digits.startswith('+'):
+            return False, 0.0
+        digit_count = len(digits) - 1
+        if digit_count < 7 or digit_count > 15:
+            return False, 0.0
+        return True, 0.6
 
     def get_pattern_descriptions(self) -> Dict[str, str]:
         """Return dictionary of pattern types and their descriptions."""

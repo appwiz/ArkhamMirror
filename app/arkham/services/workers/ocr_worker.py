@@ -45,11 +45,23 @@ def compute_file_checksum(file_path: str) -> str:
     return sha256_hash.hexdigest()
 
 
-def get_paddle_engine():
+def get_paddle_engine(force_cpu=False):
+    """
+    Initialize PaddleOCR engine.
+
+    PaddleOCR 3.x API uses 'device' parameter:
+    - device="gpu:0" for GPU (default if available)
+    - device="cpu" for CPU fallback
+    """
     global _paddle_engine
     if _paddle_engine is None:
-        logger.info("Initializing PaddleOCR Engine...")
-        _paddle_engine = PaddleOCR(use_angle_cls=True, lang="en")
+        if force_cpu:
+            logger.info("Initializing PaddleOCR Engine (CPU mode - fallback)...")
+            _paddle_engine = PaddleOCR(use_angle_cls=True, lang="en", device="cpu")
+        else:
+            # Let PaddleOCR auto-detect GPU availability
+            logger.info("Initializing PaddleOCR Engine (auto device detection)...")
+            _paddle_engine = PaddleOCR(use_angle_cls=True, lang="en")
     return _paddle_engine
 
 
@@ -141,6 +153,19 @@ def process_page_job(doc_id, doc_hash, page_num, image_path, ocr_mode="paddle"):
                 image = Image.open(image_path)
                 img_np = np.array(image)
                 result = ocr_engine.ocr(img_np)
+            except RuntimeError as e:
+                # RuntimeError often indicates GPU/CUDA issues - try CPU mode fallback
+                logger.warning(f"PaddleOCR GPU RuntimeError, trying CPU mode: {e}")
+                global _paddle_engine
+                _paddle_engine = None  # Force reinitialization
+                try:
+                    ocr_engine = get_paddle_engine(force_cpu=True)
+                    result = ocr_engine.ocr(img_np)
+                    logger.info("PaddleOCR CPU fallback successful")
+                except Exception as retry_e:
+                    logger.error(f"PaddleOCR CPU fallback also failed: {retry_e}")
+                    paddle_failed = True
+                    result = None
             except Exception as e:
                 import traceback
 
@@ -269,7 +294,7 @@ def process_page_job(doc_id, doc_hash, page_num, image_path, ocr_mode="paddle"):
 
                 # Enqueue Parser Job
                 q.enqueue(
-                    "arkham.services.workers.parser_worker.parse_minidoc_job",
+                    "app.arkham.services.workers.parser_worker.parse_minidoc_job",
                     minidoc_db_id=minidoc.id,
                 )
 
@@ -337,7 +362,7 @@ def process_page_job(doc_id, doc_hash, page_num, image_path, ocr_mode="paddle"):
                     session.commit()
 
                     q.enqueue(
-                        "arkham.services.workers.parser_worker.parse_minidoc_job",
+                        "app.arkham.services.workers.parser_worker.parse_minidoc_job",
                         minidoc_db_id=minidoc.id,
                     )
 

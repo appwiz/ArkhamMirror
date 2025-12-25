@@ -96,10 +96,23 @@ def get_table_content(table_id: int) -> Dict[str, Any]:
                 }
             except Exception as e:
                 logger.error(f"Error reading CSV: {e}")
-                # Fallback to text content parsing or return error
+                # Fallback to text content parsing
                 pass
 
-        # Fallback: if headers are stored in DB
+        # Fallback: Parse text_content if available
+        if table.text_content:
+            try:
+                headers, rows = _parse_table_text_content(table.text_content)
+                if headers or rows:
+                    return {
+                        "headers": headers,
+                        "rows": rows,
+                        "csv_path": table.csv_path,
+                    }
+            except Exception as e:
+                logger.warning(f"Error parsing text_content: {e}")
+
+        # Last fallback: if headers are stored in DB but no content
         headers = []
         if table.headers:
             try:
@@ -110,7 +123,7 @@ def get_table_content(table_id: int) -> Dict[str, Any]:
         return {
             "headers": headers,
             "rows": [],
-            "message": "Full content not available (CSV missing). Showing metadata only.",
+            "message": "Full content not available. Showing metadata only.",
             "csv_path": table.csv_path,
         }
 
@@ -119,3 +132,66 @@ def get_table_content(table_id: int) -> Dict[str, Any]:
         return {"error": str(e)}
     finally:
         session.close()
+
+
+def _parse_table_text_content(text_content: str) -> tuple:
+    """
+    Parse table text content in various formats:
+
+    Format 1 (text-based files):
+    === TABLE N ===
+    Header1 | Header2 | Header3
+    Row1Col1 | Row1Col2 | Row1Col3
+    === END TABLE N ===
+
+    Format 2 (PDF pdfplumber):
+    TABLE (Page N):
+    Header1 | Header2 | Header3
+    --------------------------------------------------
+    Row1Col1 | Row1Col2 | Row1Col3
+
+    Returns:
+        tuple of (headers: List[str], rows: List[List[str]])
+    """
+    import re
+
+    content = text_content.strip()
+
+    if not content:
+        return [], []
+
+    # Remove various table markers
+    # Format 1: === TABLE N ===
+    content = re.sub(r'=== TABLE \d+ ===\s*\n?', '', content)
+    content = re.sub(r'=== END TABLE \d+ ===\s*\n?', '', content)
+    # Format 2: TABLE (Page N):
+    content = re.sub(r'TABLE \(Page \d+\):\s*\n?', '', content)
+    content = content.strip()
+
+    if not content:
+        return [], []
+
+    lines = [line.strip() for line in content.split('\n') if line.strip()]
+
+    if not lines:
+        return [], []
+
+    # Filter out separator lines (like ----- or ===)
+    lines = [line for line in lines if not re.match(r'^[-=]+$', line)]
+
+    if not lines:
+        return [], []
+
+    # First line is headers
+    headers = [cell.strip() for cell in lines[0].split('|')]
+
+    # Rest are rows
+    rows = []
+    for line in lines[1:]:
+        # Skip separator lines that might contain pipes
+        if re.match(r'^[\-=\s|]+$', line):
+            continue
+        cells = [cell.strip() for cell in line.split('|')]
+        rows.append(cells)
+
+    return headers, rows

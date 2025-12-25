@@ -112,6 +112,15 @@ class UploadState(rx.State):
             redis_conn = Redis.from_url(REDIS_URL)
             q = Queue(connection=redis_conn)
 
+            # Read OCR mode from Redis (set by IngestionStatusState)
+            try:
+                saved_ocr_mode = redis_conn.get("arkham:ocr_mode")
+                if saved_ocr_mode:
+                    self.ocr_mode = saved_ocr_mode.decode()
+                    logger.info(f"Using OCR mode from ingestion settings: {self.ocr_mode}")
+            except Exception as e:
+                logger.warning(f"Could not read OCR mode from Redis, using default '{self.ocr_mode}': {e}")
+
             # Calculate batches for throttling
             total_files = len(saved_files)
             self.total_batches = (total_files + self.batch_size - 1) // self.batch_size

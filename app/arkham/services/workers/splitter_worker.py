@@ -10,8 +10,10 @@ from pathlib import Path
 
 from config.settings import DATABASE_URL, REDIS_URL, PAGES_DIR
 
-from app.arkham.services.db.models import Document, MiniDoc
+from app.arkham.services.db.models import Document, MiniDoc, ExtractedTable
 from app.arkham.services.metadata_service import extract_pdf_metadata
+from app.arkham.services.table_extraction import TableExtractor
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -85,6 +87,42 @@ def split_pdf_job(doc_id, file_path, ocr_mode="paddle"):
             logger.warning(f"PDF metadata extraction failed: {str(e)}")
             # Don't fail the entire job if metadata extraction fails
 
+        # Extract tables from PDF (paddle mode only - qwen does image-based extraction)
+        # This uses pdfplumber which works better on native PDFs than OCR'd images
+        if ocr_mode == "paddle":
+            try:
+                logger.info(f"Extracting tables from PDF: {file_path}")
+                extractor = TableExtractor(min_rows=2, min_cols=2)
+                tables = extractor.extract_tables_from_pdf(file_path)
+
+                for table_info in tables:
+                    try:
+                        df = table_info["dataframe"]
+                        headers = list(df.columns)
+                        text_content = extractor.extract_table_text(table_info)
+
+                        ext_table = ExtractedTable(
+                            doc_id=doc_id,
+                            page_num=table_info["page_num"],
+                            table_index=table_info["table_index"],
+                            row_count=table_info["row_count"],
+                            col_count=table_info["col_count"],
+                            headers=json.dumps(headers),
+                            text_content=text_content,
+                        )
+                        session.add(ext_table)
+                    except Exception as table_err:
+                        logger.warning(f"Failed to save table {table_info.get('table_index', '?')} on page {table_info.get('page_num', '?')}: {table_err}")
+                        continue
+
+                if tables:
+                    session.commit()
+                    logger.info(f"Extracted and saved {len(tables)} tables from PDF")
+
+            except Exception as e:
+                logger.warning(f"Table extraction failed (non-fatal): {e}")
+                # Don't fail the entire job if table extraction fails
+
         # Create output directory for pages
         # Use file_hash as folder name for stability
         doc_hash = doc_record.file_hash
@@ -101,7 +139,7 @@ def split_pdf_job(doc_id, file_path, ocr_mode="paddle"):
             # Enqueue OCR job for this page
             # We pass doc_id (int), doc_hash (str), page_num (1-based), and image_path
             q.enqueue(
-                "arkham.services.workers.ocr_worker.process_page_job",
+                "app.arkham.services.workers.ocr_worker.process_page_job",
                 doc_id=doc_id,
                 doc_hash=doc_hash,
                 page_num=page_num + 1,
